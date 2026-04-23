@@ -1,0 +1,607 @@
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans)}
+.wrap{padding:1rem 0}
+.top{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.panel{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:1rem}
+.panel-title{font-size:13px;font-weight:500;color:var(--color-text-secondary);margin-bottom:12px;text-transform:uppercase;letter-spacing:0.04em}
+canvas{display:block;border-radius:var(--border-radius-md)}
+.controls{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+.ctrl{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:0.75rem 1rem}
+.ctrl label{font-size:13px;color:var(--color-text-secondary);display:block;margin-bottom:6px}
+.ctrl-row{display:flex;align-items:center;gap:10px}
+.ctrl-row input[type=range]{flex:1}
+.ctrl-row .val{font-size:13px;font-weight:500;color:var(--color-text-primary);min-width:36px;text-align:right}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:var(--border-radius-md);font-size:13px;font-weight:500;margin-bottom:12px}
+.info-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px}
+.metric{background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:0.75rem;text-align:center}
+.metric-label{font-size:12px;color:var(--color-text-secondary);margin-bottom:4px}
+.metric-value{font-size:18px;font-weight:500;color:var(--color-text-primary)}
+.legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}
+.leg-item{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--color-text-secondary)}
+.leg-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.tabs{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+.tab{padding:5px 14px;border-radius:var(--border-radius-md);font-size:13px;cursor:pointer;border:0.5px solid var(--color-border-secondary);background:transparent;color:var(--color-text-secondary)}
+.tab.active{background:var(--color-background-info);color:var(--color-text-info);border-color:var(--color-border-info)}
+</style>
+
+<div class="wrap">
+
+<div class="tabs" id="tabs">
+  <button class="tab active" data-mode="eigenvalue">Eigenvalue map</button>
+  <button class="tab" data-mode="phase">Phase portrait</button>
+  <button class="tab" data-mode="lyapunov">Lyapunov energy</button>
+  <button class="tab" data-mode="pendulum">Pendulum</button>
+</div>
+
+<div id="badge-row" style="margin-bottom:10px"></div>
+
+<div class="info-row" id="info-row">
+  <div class="metric"><div class="metric-label">Trace τ</div><div class="metric-value" id="m-trace">0</div></div>
+  <div class="metric"><div class="metric-label">Det Δ</div><div class="metric-value" id="m-det">0</div></div>
+  <div class="metric"><div class="metric-label">Discriminant D</div><div class="metric-value" id="m-disc">0</div></div>
+</div>
+
+<div class="top">
+  <div class="panel">
+    <div class="panel-title" id="left-title">Phase portrait</div>
+    <canvas id="phaseCanvas" width="340" height="320"></canvas>
+    <div class="legend" id="legend1"></div>
+  </div>
+  <div class="panel">
+    <div class="panel-title" id="right-title">Eigenvalue plane</div>
+    <canvas id="eigenCanvas" width="340" height="320"></canvas>
+    <div class="legend" id="legend2"></div>
+  </div>
+</div>
+
+<div class="controls" id="controls-wrap">
+  <div class="ctrl">
+    <label>Matrix entry a₁₁</label>
+    <div class="ctrl-row">
+      <input type="range" id="a11" min="-3" max="3" step="0.1" value="-1">
+      <span class="val" id="a11v">-1.0</span>
+    </div>
+  </div>
+  <div class="ctrl">
+    <label>Matrix entry a₁₂</label>
+    <div class="ctrl-row">
+      <input type="range" id="a12" min="-3" max="3" step="0.1" value="1">
+      <span class="val" id="a12v">1.0</span>
+    </div>
+  </div>
+  <div class="ctrl">
+    <label>Matrix entry a₂₁</label>
+    <div class="ctrl-row">
+      <input type="range" id="a21" min="-3" max="3" step="0.1" value="-2">
+      <span class="val" id="a21v">-2.0</span>
+    </div>
+  </div>
+  <div class="ctrl">
+    <label>Matrix entry a₂₂</label>
+    <div class="ctrl-row">
+      <input type="range" id="a22" min="-3" max="3" step="0.1" value="-1">
+      <span class="val" id="a22v">-1.0</span>
+    </div>
+  </div>
+</div>
+
+<div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:0.75rem 1rem;font-size:13px;color:var(--color-text-secondary);line-height:1.6" id="explanation"></div>
+
+</div>
+
+<script>
+const PC = document.getElementById('phaseCanvas');
+const EC = document.getElementById('eigenCanvas');
+const pCtx = PC.getContext('2d');
+const eCtx = EC.getContext('2d');
+
+let mode = 'eigenvalue';
+let pendulumAngle = Math.PI / 3;
+let pendulumOmega = 0;
+let animId = null;
+
+const sliders = ['a11','a12','a21','a22'];
+const vals = {a11:-1,a12:1,a21:-2,a22:-1};
+
+function getMatrix(){return[vals.a11,vals.a12,vals.a21,vals.a22]}
+
+function eigenvalues(a,b,c,d){
+  const tr=a+d, det=a*d-b*c, disc=tr*tr-4*det;
+  if(disc>=0){
+    const s=Math.sqrt(disc);
+    return [{re:(tr+s)/2,im:0},{re:(tr-s)/2,im:0}];
+  } else {
+    const s=Math.sqrt(-disc);
+    return [{re:tr/2,im:s/2},{re:tr/2,im:-s/2}];
+  }
+}
+
+function classifyCP(tr,det,disc){
+  if(det<0) return {label:'Saddle point',color:'#E24B4A',stable:'unstable',desc:'One positive, one negative eigenvalue. Trajectories form a hyperbola-like pattern — the critical point is always unstable. There are stable and unstable manifolds (separatrices).'};
+  if(det===0) return {label:'Non-isolated',color:'#888780',stable:'degenerate',desc:'Determinant is zero — the origin is not an isolated critical point. A line of equilibria exists.'};
+  if(disc>0&&tr<0) return {label:'Stable node',color:'#1D9E75',stable:'asymptotically stable',desc:'Both eigenvalues are real and negative. All trajectories converge to the origin along straight-line directions (eigenvectors). The fastest decay direction dominates near the origin.'};
+  if(disc>0&&tr>0) return {label:'Unstable node',color:'#D85A30',stable:'unstable',desc:'Both eigenvalues are real and positive. All trajectories diverge from the origin. The system grows exponentially in both eigenvector directions.'};
+  if(disc>0&&tr===0) return {label:'Degenerate',color:'#888780',stable:'degenerate',desc:'Special case.'};
+  if(disc<0&&tr<0) return {label:'Stable spiral',color:'#0F6E56',stable:'asymptotically stable',desc:'Complex eigenvalues with negative real part. Trajectories spiral inward, oscillating while decaying. The system returns to equilibrium after any disturbance.'};
+  if(disc<0&&tr>0) return {label:'Unstable spiral',color:'#993C1D',stable:'unstable',desc:'Complex eigenvalues with positive real part. Trajectories spiral outward with growing oscillations. The system is unstable.'};
+  if(disc<0&&Math.abs(tr)<0.001) return {label:'Centre',color:'#185FA5',stable:'stable (not asymptotic)',desc:'Pure imaginary eigenvalues. Trajectories are closed ellipses — the system oscillates forever without growing or decaying. Stable, but never returns exactly to equilibrium.'};
+  if(disc===0&&tr<0) return {label:'Stable star / degenerate node',color:'#1D9E75',stable:'asymptotically stable',desc:'Repeated negative eigenvalue. Trajectories converge to origin, possibly along a straight line or spiraling in a degenerate way.'};
+  if(disc===0&&tr>0) return {label:'Unstable star / degenerate node',color:'#D85A30',stable:'unstable',desc:'Repeated positive eigenvalue.'};
+  return {label:'Centre',color:'#185FA5',stable:'stable',desc:''};
+}
+
+function rk4Step(x,y,dt,a11,a12,a21,a22){
+  const f=(x,y)=>[a11*x+a12*y,a21*x+a22*y];
+  const [k1x,k1y]=f(x,y);
+  const [k2x,k2y]=f(x+dt/2*k1x,y+dt/2*k1y);
+  const [k3x,k3y]=f(x+dt/2*k2x,y+dt/2*k2y);
+  const [k4x,k4y]=f(x+dt*k3x,y+dt*k3y);
+  return [x+dt/6*(k1x+2*k2x+2*k3x+k4x),y+dt/6*(k1y+2*k2y+2*k3y+k4y)];
+}
+
+function drawPhasePortrait(){
+  const W=PC.width,H=PC.height;
+  const cx=W/2,cy=H/2;
+  const scale=60;
+  const [a,b,c,d]=getMatrix();
+  const tr=a+d,det=a*d-b*c,disc=tr*tr-4*det;
+  const cls=classifyCP(tr,det,disc);
+
+  pCtx.clearRect(0,0,W,H);
+
+  const isDark=window.matchMedia('(prefers-color-scheme:dark)').matches;
+  const gridCol=isDark?'rgba(255,255,255,0.07)':'rgba(0,0,0,0.06)';
+  const axisCol=isDark?'rgba(255,255,255,0.25)':'rgba(0,0,0,0.25)';
+  const textCol=isDark?'#aaa':'#666';
+
+  pCtx.strokeStyle=gridCol; pCtx.lineWidth=0.5;
+  for(let i=-5;i<=5;i++){
+    pCtx.beginPath();pCtx.moveTo(cx+i*scale,0);pCtx.lineTo(cx+i*scale,H);pCtx.stroke();
+    pCtx.beginPath();pCtx.moveTo(0,cy+i*scale);pCtx.lineTo(W,cy+i*scale);pCtx.stroke();
+  }
+  pCtx.strokeStyle=axisCol; pCtx.lineWidth=1;
+  pCtx.beginPath();pCtx.moveTo(0,cy);pCtx.lineTo(W,cy);pCtx.stroke();
+  pCtx.beginPath();pCtx.moveTo(cx,0);pCtx.lineTo(cx,H);pCtx.stroke();
+
+  pCtx.fillStyle=textCol; pCtx.font='11px var(--font-sans)';
+  pCtx.fillText('x₁',W-16,cy-6); pCtx.fillText('x₂',cx+6,12);
+
+  const ICs=[];
+  const r=[1.5,2.5,3.2];
+  const angles=[0,Math.PI/3,2*Math.PI/3,Math.PI,4*Math.PI/3,5*Math.PI/3];
+  for(const rad of r) for(const ang of angles) ICs.push([rad*Math.cos(ang),rad*Math.sin(ang)]);
+
+  const colors=['#1D9E75','#185FA5','#D85A30','#BA7517','#534AB7','#993C1D'];
+  const maxSteps=600;
+  const dt=0.025;
+  const maxR=5.5;
+
+  ICs.forEach(([x0,y0],i)=>{
+    const col=colors[i%colors.length];
+    pCtx.strokeStyle=col; pCtx.lineWidth=1.5; pCtx.globalAlpha=0.75;
+    pCtx.beginPath();
+    let x=x0,y=y0;
+    pCtx.moveTo(cx+x*scale,cy-y*scale);
+    let drawn=false;
+    for(let s=0;s<maxSteps;s++){
+      const [nx,ny]=rk4Step(x,y,dt,a,b,c,d);
+      if(!isFinite(nx)||!isFinite(ny)||Math.sqrt(nx*nx+ny*ny)>maxR) break;
+      pCtx.lineTo(cx+nx*scale,cy-ny*scale);
+      x=nx; y=ny; drawn=true;
+    }
+    if(drawn) pCtx.stroke();
+    pCtx.globalAlpha=1;
+
+    const arrowT=Math.min(0.5,dt*30);
+    let ax=x0,ay=y0;
+    for(let s=0;s<30&&Math.sqrt(ax*ax+ay*ay)<maxR;s++){
+      [ax,ay]=rk4Step(ax,ay,dt,a,b,c,d);
+    }
+    const dx2=ax-x0,dy2=ay-y0;
+    const len=Math.sqrt(dx2*dx2+dy2*dy2);
+    if(len>0.05){
+      const nx2=dx2/len,ny2=dy2/len;
+      const px=cx+ax*scale,py=cy-ay*scale;
+      pCtx.fillStyle=col; pCtx.globalAlpha=0.9;
+      pCtx.beginPath();
+      pCtx.moveTo(px+nx2*7,py-ny2*7);
+      pCtx.lineTo(px-nx2*4+ny2*4,py+ny2*4+nx2*4);
+      pCtx.lineTo(px-nx2*4-ny2*4,py+ny2*4-nx2*4);
+      pCtx.fill(); pCtx.globalAlpha=1;
+    }
+  });
+
+  pCtx.fillStyle=cls.color;
+  pCtx.beginPath();pCtx.arc(cx,cy,7,0,Math.PI*2);pCtx.fill();
+  pCtx.strokeStyle=isDark?'#222':'#fff';pCtx.lineWidth=2;
+  pCtx.beginPath();pCtx.arc(cx,cy,7,0,Math.PI*2);pCtx.stroke();
+}
+
+function drawEigenPlane(){
+  const W=EC.width,H=EC.height;
+  const [a,b,c,d]=getMatrix();
+  const tr=a+d,det=a*d-b*c,disc=tr*tr-4*det;
+  const eigs=eigenvalues(a,b,c,d);
+
+  eCtx.clearRect(0,0,W,H);
+  const isDark=window.matchMedia('(prefers-color-scheme:dark)').matches;
+
+  const scX=W/8, scY=H/8;
+  const cx=W/2,cy=H/2;
+
+  const gridCol=isDark?'rgba(255,255,255,0.07)':'rgba(0,0,0,0.06)';
+  const axisCol=isDark?'rgba(255,255,255,0.25)':'rgba(0,0,0,0.25)';
+  const textCol=isDark?'#aaa':'#666';
+
+  eCtx.strokeStyle=gridCol; eCtx.lineWidth=0.5;
+  for(let i=-4;i<=4;i++){
+    eCtx.beginPath();eCtx.moveTo(cx+i*scX,0);eCtx.lineTo(cx+i*scX,H);eCtx.stroke();
+    eCtx.beginPath();eCtx.moveTo(0,cy+i*scY);eCtx.lineTo(W,cy+i*scY);eCtx.stroke();
+  }
+
+  eCtx.fillStyle=isDark?'rgba(229,70,70,0.12)':'rgba(229,70,70,0.08)';
+  eCtx.fillRect(cx,0,cx,H);
+  eCtx.fillStyle=isDark?'rgba(29,158,117,0.12)':'rgba(29,158,117,0.08)';
+  eCtx.fillRect(0,0,cx,H);
+
+  eCtx.strokeStyle=axisCol; eCtx.lineWidth=1;
+  eCtx.beginPath();eCtx.moveTo(0,cy);eCtx.lineTo(W,cy);eCtx.stroke();
+  eCtx.beginPath();eCtx.moveTo(cx,0);eCtx.lineTo(cx,H);eCtx.stroke();
+
+  eCtx.font='11px var(--font-sans)'; eCtx.fillStyle=textCol;
+  eCtx.fillText('Re(λ)',W-32,cy-6);
+  eCtx.fillText('Im(λ)',cx+6,12);
+  eCtx.fillStyle=isDark?'rgba(29,158,117,0.6)':'rgba(29,158,117,0.4)';
+  eCtx.font='12px var(--font-sans)';
+  eCtx.fillText('← stable',cx-70,20);
+  eCtx.fillStyle=isDark?'rgba(229,70,70,0.6)':'rgba(229,70,70,0.4)';
+  eCtx.fillText('unstable →',cx+6,20);
+
+  eigs.forEach((ev,i)=>{
+    const px=cx+ev.re*scX, py=cy-ev.im*scY;
+    const col=(ev.re<0&&Math.abs(ev.im)<0.001)?'#1D9E75':
+              (ev.re>0&&Math.abs(ev.im)<0.001)?'#D85A30':
+              (ev.re<-0.001)?'#0F6E56':
+              (ev.re>0.001)?'#993C1D':'#185FA5';
+    eCtx.fillStyle=col;
+    eCtx.beginPath();eCtx.arc(px,py,9,0,Math.PI*2);eCtx.fill();
+    eCtx.strokeStyle=isDark?'#222':'#fff';eCtx.lineWidth=2;
+    eCtx.beginPath();eCtx.arc(px,py,9,0,Math.PI*2);eCtx.stroke();
+
+    eCtx.fillStyle=textCol; eCtx.font='11px var(--font-sans)';
+    const reStr=ev.re.toFixed(2), imStr=ev.im.toFixed(2);
+    const label=Math.abs(ev.im)<0.001?`λ${i+1}=${reStr}`:`λ${i+1}=${reStr}${ev.im>=0?'+':''}${imStr}i`;
+    eCtx.fillText(label,Math.max(4,Math.min(W-80,px+12)),Math.max(14,Math.min(H-4,py+4)));
+  });
+}
+
+function drawLyapunov(){
+  const W=PC.width,H=PC.height;
+  pCtx.clearRect(0,0,W,H);
+  const isDark=window.matchMedia('(prefers-color-scheme:dark)').matches;
+  const cx=W/2,cy=H/2,scale=50;
+
+  const textCol=isDark?'#aaa':'#666';
+  const gridCol=isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.05)';
+  pCtx.strokeStyle=gridCol;pCtx.lineWidth=0.5;
+  for(let i=-6;i<=6;i++){
+    pCtx.beginPath();pCtx.moveTo(cx+i*scale,0);pCtx.lineTo(cx+i*scale,H);pCtx.stroke();
+    pCtx.beginPath();pCtx.moveTo(0,cy+i*scale);pCtx.lineTo(W,cy+i*scale);pCtx.stroke();
+  }
+
+  const V=(x,y)=>x*x+y*y;
+  const levels=[0.2,0.5,1.0,1.8,2.8,4.2];
+  const cols=['#E1F5EE','#9FE1CB','#5DCAA5','#1D9E75','#0F6E56','#085041'];
+  levels.forEach((lev,idx)=>{
+    pCtx.strokeStyle=cols[idx];pCtx.lineWidth=1.8;
+    const r=Math.sqrt(lev)*scale;
+    pCtx.beginPath();pCtx.arc(cx,cy,r,0,Math.PI*2);pCtx.stroke();
+    pCtx.fillStyle=cols[idx];pCtx.font='11px var(--font-sans)';
+    pCtx.fillText(`V=${lev.toFixed(1)}`,cx+r+3,cy+3);
+  });
+
+  const [a,b,c,d]=getMatrix();
+  const arrows=[];
+  for(let xi=-2.5;xi<=2.5;xi+=0.8){
+    for(let yi=-2.5;yi<=2.5;yi+=0.8){
+      if(xi===0&&yi===0)continue;
+      const vdot=2*xi*(a*xi+b*yi)+2*yi*(c*xi+d*yi);
+      arrows.push({xi,yi,vdot});
+    }
+  }
+  arrows.forEach(({xi,yi,vdot})=>{
+    const px=cx+xi*scale,py=cy-yi*scale;
+    const col=vdot<0?'#1D9E75':vdot>0?'#E24B4A':'#888780';
+    pCtx.fillStyle=col;
+    pCtx.beginPath();pCtx.arc(px,py,4,0,Math.PI*2);pCtx.fill();
+  });
+
+  pCtx.fillStyle=textCol;pCtx.font='11px var(--font-sans)';
+  pCtx.fillText('x₁',W-16,cy-6);pCtx.fillText('x₂',cx+6,12);
+  pCtx.fillStyle='#1D9E75';pCtx.fillText('● V̇<0 (stable)',8,H-22);
+  pCtx.fillStyle='#E24B4A';pCtx.fillText('● V̇>0 (unstable)',8,H-8);
+
+  pCtx.fillStyle='#E24B4A';
+  pCtx.beginPath();pCtx.arc(cx,cy,7,0,Math.PI*2);pCtx.fill();
+}
+
+function drawLyapunovRight(){
+  const W=EC.width,H=EC.height;
+  eCtx.clearRect(0,0,W,H);
+  const isDark=window.matchMedia('(prefers-color-scheme:dark)').matches;
+  const textCol=isDark?'rgba(255,255,255,0.7)':'rgba(0,0,0,0.6)';
+
+  eCtx.fillStyle=isDark?'rgba(255,255,255,0.05)':'rgba(0,0,0,0.03)';
+  eCtx.fillRect(0,0,W,H);
+
+  const lines=[
+    {y:40,text:'V(x) = x₁² + x₂²  (bowl-shaped)',col:'#1D9E75'},
+    {y:70,text:'V(0,0) = 0',col:textCol},
+    {y:95,text:'V(x) > 0  for x ≠ 0',col:textCol},
+    {y:130,text:'V̇ = 2x₁·ẋ₁ + 2x₂·ẋ₂',col:'#185FA5'},
+    {y:160,text:'   = 2x₁(a₁₁x₁+a₁₂x₂)',col:'#185FA5'},
+    {y:185,text:'   + 2x₂(a₂₁x₁+a₂₂x₂)',col:'#185FA5'},
+    {y:230,text:'If V̇ < 0 everywhere:',col:'#1D9E75'},
+    {y:255,text:'→ Asymptotically stable',col:'#1D9E75'},
+    {y:285,text:'If V̇ > 0 somewhere:',col:'#E24B4A'},
+    {y:310,text:'→ Unstable (Chetaev)',col:'#E24B4A'},
+  ];
+
+  const [a,b,c,d]=getMatrix();
+  const checkPoints=[[1,0],[0,1],[1,1],[-1,1],[0.5,0.8]];
+  const vdots=checkPoints.map(([x,y])=>2*x*(a*x+b*y)+2*y*(c*x+d*y));
+  const allNeg=vdots.every(v=>v<0);
+  const somePos=vdots.some(v=>v>0);
+
+  eCtx.font='13px var(--font-mono)';
+  lines.forEach(l=>{
+    eCtx.fillStyle=l.col;
+    eCtx.fillText(l.text,16,l.y);
+  });
+
+  const verdict=allNeg?'V̇ < 0 ✓  Asymptotically stable':
+                somePos?'V̇ > 0 somewhere — unstable':'Borderline case';
+  const vcol=allNeg?'#1D9E75':somePos?'#E24B4A':'#888780';
+  eCtx.fillStyle=vcol;
+  eCtx.font='bold 13px var(--font-sans)';
+  eCtx.fillText(verdict,16,H-20);
+}
+
+function drawPendulum(){
+  const W=PC.width,H=PC.height;
+  pCtx.clearRect(0,0,W,H);
+  const isDark=window.matchMedia('(prefers-color-scheme:dark)').matches;
+  const cx=W/2,cy=H/2,scale=55;
+  const textCol=isDark?'#aaa':'#666';
+  const gridCol=isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.05)';
+
+  pCtx.strokeStyle=gridCol;pCtx.lineWidth=0.5;
+  for(let i=-3;i<=3;i++){
+    pCtx.beginPath();pCtx.moveTo(cx+i*scale,0);pCtx.lineTo(cx+i*scale,H);pCtx.stroke();
+    pCtx.beginPath();pCtx.moveTo(0,cy+i*scale);pCtx.lineTo(W,cy+i*scale);pCtx.stroke();
+  }
+  const axCol=isDark?'rgba(255,255,255,0.2)':'rgba(0,0,0,0.2)';
+  pCtx.strokeStyle=axCol;pCtx.lineWidth=1;
+  pCtx.beginPath();pCtx.moveTo(0,cy);pCtx.lineTo(W,cy);pCtx.stroke();
+  pCtx.beginPath();pCtx.moveTo(cx,0);pCtx.lineTo(cx,H);pCtx.stroke();
+
+  const energies=[0.4,0.9,1.3,1.8,2.5];
+  const cols=['#E1F5EE','#5DCAA5','#1D9E75','#0F6E56','#085041'];
+  energies.forEach((E,idx)=>{
+    if(E<1){
+      pCtx.strokeStyle=cols[idx];pCtx.lineWidth=1.8;pCtx.beginPath();
+      let started=false;
+      for(let th=-Math.PI+0.01;th<=Math.PI-0.01;th+=0.02){
+        const cosT=Math.cos(th);
+        const v2=2*(E+cosT);
+        if(v2<0)continue;
+        const om=Math.sqrt(v2);
+        const px=cx+th*scale,py1=cy-om*scale,py2=cy+om*scale;
+        if(!started){pCtx.moveTo(px,py1);started=true;}else{pCtx.lineTo(px,py1);}
+      }
+      for(let th=Math.PI-0.01;th>=-Math.PI+0.01;th-=0.02){
+        const cosT=Math.cos(th);
+        const v2=2*(E+cosT);
+        if(v2<0)continue;
+        const om=-Math.sqrt(v2);
+        pCtx.lineTo(cx+th*scale,cy-om*scale);
+      }
+      pCtx.closePath();pCtx.stroke();
+    } else {
+      const steps=600;
+      pCtx.strokeStyle=E>1.05?cols[idx]:'#E24B4A';
+      pCtx.lineWidth=E>1.05?1.5:2.5;
+      [1,-1].forEach(sign=>{
+        pCtx.beginPath();let s2=false;
+        for(let i=0;i<=steps;i++){
+          const th=-Math.PI*2+i*(Math.PI*4/steps);
+          const cosT=Math.cos(th);
+          const v2=2*(E+cosT);
+          if(v2<0)continue;
+          const om=sign*Math.sqrt(v2);
+          const px=cx+th*scale,py=cy-om*scale;
+          if(px<0||px>W||py<0||py>H){s2=false;continue;}
+          if(!s2){pCtx.moveTo(px,py);s2=true;}else pCtx.lineTo(px,py);
+        }
+        pCtx.stroke();
+      });
+    }
+  });
+
+  [-Math.PI,0,Math.PI].forEach(th=>{
+    const px=cx+th*scale;
+    const isStable=Math.abs(th)<0.1;
+    pCtx.fillStyle=isStable?'#1D9E75':'#E24B4A';
+    pCtx.beginPath();pCtx.arc(px,cy,7,0,Math.PI*2);pCtx.fill();
+    pCtx.strokeStyle=isDark?'#222':'#fff';pCtx.lineWidth=2;
+    pCtx.beginPath();pCtx.arc(px,cy,7,0,Math.PI*2);pCtx.stroke();
+    pCtx.fillStyle=isDark?'#aaa':'#555';pCtx.font='11px var(--font-sans)';
+    pCtx.fillText(isStable?'θ=0':'θ=±π',px-14,cy+20);
+  });
+
+  const curPx=cx+pendulumAngle*scale;
+  const curPy=cy-pendulumOmega*scale;
+  if(curPx>0&&curPx<W&&curPy>0&&curPy<H){
+    pCtx.fillStyle='#BA7517';
+    pCtx.beginPath();pCtx.arc(curPx,curPy,8,0,Math.PI*2);pCtx.fill();
+    pCtx.strokeStyle='#fff';pCtx.lineWidth=2;
+    pCtx.beginPath();pCtx.arc(curPx,curPy,8,0,Math.PI*2);pCtx.stroke();
+  }
+
+  pCtx.fillStyle=textCol;pCtx.font='11px var(--font-sans)';
+  pCtx.fillText('θ',W-16,cy-6);pCtx.fillText('ω=θ̇',cx+6,12);
+}
+
+function drawPendulumRight(){
+  const W=EC.width,H=EC.height;
+  eCtx.clearRect(0,0,W,H);
+  const isDark=window.matchMedia('(prefers-color-scheme:dark)').matches;
+  const L=120,pivx=W/2,pivy=60;
+  const armLen=100;
+  const ang=pendulumAngle;
+  const bx=pivx+armLen*Math.sin(ang);
+  const by=pivy+armLen*Math.cos(ang);
+
+  eCtx.fillStyle=isDark?'rgba(255,255,255,0.08)':'rgba(0,0,0,0.05)';
+  eCtx.fillRect(0,0,W,70);
+  eCtx.strokeStyle=isDark?'rgba(255,255,255,0.3)':'rgba(0,0,0,0.3)';
+  eCtx.lineWidth=3;
+  eCtx.strokeRect(pivx-30,0,60,8);
+
+  eCtx.strokeStyle=isDark?'rgba(255,255,255,0.6)':'rgba(0,0,0,0.6)';
+  eCtx.lineWidth=2;
+  eCtx.beginPath();eCtx.moveTo(pivx,pivy+4);eCtx.lineTo(bx,by);eCtx.stroke();
+
+  eCtx.fillStyle='#1D9E75';
+  eCtx.beginPath();eCtx.arc(pivx,pivy,5,0,Math.PI*2);eCtx.fill();
+
+  eCtx.fillStyle='#BA7517';
+  eCtx.beginPath();eCtx.arc(bx,by,16,0,Math.PI*2);eCtx.fill();
+  eCtx.strokeStyle='#fff';eCtx.lineWidth=2;
+  eCtx.beginPath();eCtx.arc(bx,by,16,0,Math.PI*2);eCtx.stroke();
+
+  const textCol=isDark?'rgba(255,255,255,0.8)':'rgba(0,0,0,0.75)';
+  eCtx.fillStyle=textCol;eCtx.font='13px var(--font-sans)';
+  eCtx.fillText(`θ = ${(pendulumAngle*180/Math.PI).toFixed(1)}°`,16,H-90);
+  eCtx.fillText(`ω = ${pendulumOmega.toFixed(2)} rad/s`,16,H-70);
+  const E=-Math.cos(pendulumAngle)+pendulumOmega*pendulumOmega/2+1;
+  eCtx.fillText(`Energy E = ${E.toFixed(3)}`,16,H-50);
+  const stable=Math.abs(pendulumAngle)<Math.PI*0.7&&E<0.95;
+  const stStr=stable?'Libration (stable)':'Rotation / near separatrix';
+  eCtx.fillStyle=stable?'#1D9E75':'#D85A30';
+  eCtx.fillText(stStr,16,H-20);
+}
+
+function animatePendulum(){
+  const dt=0.04;
+  pendulumOmega+=-Math.sin(pendulumAngle)*dt;
+  pendulumAngle+=pendulumOmega*dt;
+  if(pendulumAngle>Math.PI*2) pendulumAngle-=Math.PI*2;
+  if(pendulumAngle<-Math.PI*2) pendulumAngle+=Math.PI*2;
+  drawPendulum();
+  drawPendulumRight();
+  animId=requestAnimationFrame(animatePendulum);
+}
+
+function updateUI(){
+  const [a,b,c,d]=getMatrix();
+  const tr=a+d,det=a*d-b*c,disc=tr*tr-4*det;
+  const cls=classifyCP(tr,det,disc);
+
+  document.getElementById('m-trace').textContent=tr.toFixed(2);
+  document.getElementById('m-det').textContent=det.toFixed(2);
+  document.getElementById('m-disc').textContent=disc.toFixed(2);
+
+  const badge=document.getElementById('badge-row');
+  const stableColors={
+    'asymptotically stable':'background:#E1F5EE;color:#0F6E56',
+    'unstable':'background:#FCEBEB;color:#A32D2D',
+    'stable (not asymptotic)':'background:#E6F1FB;color:#185FA5',
+    'degenerate':'background:#F1EFE8;color:#5F5E5A',
+  };
+  const sc=stableColors[cls.stable]||'background:#F1EFE8;color:#5F5E5A';
+  badge.innerHTML=`<span class="badge" style="${sc}">
+    <span style="width:8px;height:8px;border-radius:50%;background:currentColor;opacity:0.8"></span>
+    ${cls.label} — ${cls.stable}
+  </span>`;
+
+  document.getElementById('explanation').textContent=cls.desc;
+}
+
+function render(){
+  if(animId){cancelAnimationFrame(animId);animId=null;}
+  updateUI();
+  if(mode==='eigenvalue'||mode==='phase'){
+    drawPhasePortrait();
+    drawEigenPlane();
+  } else if(mode==='lyapunov'){
+    drawLyapunov();
+    drawLyapunovRight();
+  } else if(mode==='pendulum'){
+    animatePendulum();
+  }
+}
+
+function setMode(m){
+  mode=m;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.mode===m));
+  const ctrlWrap=document.getElementById('controls-wrap');
+  const infoRow=document.getElementById('info-row');
+  const leftT=document.getElementById('left-title');
+  const rightT=document.getElementById('right-title');
+
+  if(m==='eigenvalue'||m==='phase'){
+    ctrlWrap.style.display='grid';
+    infoRow.style.display='grid';
+    leftT.textContent='Phase portrait';
+    rightT.textContent='Eigenvalue plane';
+    document.getElementById('explanation').textContent='';
+    updateUI();
+  } else if(m==='lyapunov'){
+    ctrlWrap.style.display='grid';
+    infoRow.style.display='none';
+    leftT.textContent='Lyapunov level sets V=x₁²+x₂²';
+    rightT.textContent='Lyapunov analysis';
+    document.getElementById('badge-row').innerHTML='';
+    document.getElementById('explanation').textContent='Colored dots show sign of V̇ at each point. Green = V̇<0 (system moving to lower energy). Red = V̇>0 (energy increasing).';
+  } else if(m==='pendulum'){
+    ctrlWrap.style.display='none';
+    infoRow.style.display='none';
+    leftT.textContent='Pendulum phase portrait (click to set IC)';
+    rightT.textContent='Physical pendulum';
+    document.getElementById('badge-row').innerHTML='';
+    document.getElementById('explanation').textContent='The green circles are stable centres (pendulum swinging back and forth). The red squares at θ=±π are saddle points (pendulum balanced upright — unstable). The thick red curves are separatrices dividing libration from rotation.';
+  }
+  render();
+}
+
+sliders.forEach(id=>{
+  const sl=document.getElementById(id);
+  const vl=document.getElementById(id+'v');
+  sl.addEventListener('input',()=>{
+    vals[id]=parseFloat(sl.value);
+    vl.textContent=parseFloat(sl.value).toFixed(1);
+    render();
+  });
+  vl.textContent=parseFloat(sl.value).toFixed(1);
+});
+
+document.querySelectorAll('.tab').forEach(t=>{
+  t.addEventListener('click',()=>setMode(t.dataset.mode));
+});
+
+PC.addEventListener('click',e=>{
+  if(mode!=='pendulum')return;
+  const rect=PC.getBoundingClientRect();
+  const mx=e.clientX-rect.left,my=e.clientY-rect.top;
+  const cx=PC.width/2,cy=PC.height/2,scale=55;
+  pendulumAngle=(mx-cx)/scale;
+  pendulumOmega=-(my-cy)/scale;
+  if(animId){cancelAnimationFrame(animId);animId=null;}
+  animatePendulum();
+});
+
+setMode('eigenvalue');
+</script>
